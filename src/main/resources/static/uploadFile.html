@@ -1,0 +1,196 @@
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>分片上传</title>
+    <script src="https://cdn.bootcdn.net/ajax/libs/spark-md5/3.0.2/spark-md5.min.js"></script>
+</head>
+
+<body>
+分片上传
+
+<form enctype="multipart/form-data">
+    <input type="file" name="fileInput" id="fileInput">
+    <input type="button" value="计算文件MD5" onclick="calculateFileMD5()">
+    <input type="button" value="上传" onclick="uploadFile()">
+    <input type="button" value="暂停" onclick="pause()">
+    <input type="button" value="续传" onclick="reUpload()">
+    <input type="button" value="检测文件完整性" onclick="checkFile()">
+</form>
+
+<p>
+    文件MD5:
+    <span id="fileMd5"></span>
+</p>
+<p>
+    分片个数:
+    <span id="chunksNumber"></span>
+</p>
+<p>
+    <div> 上传结果: </div>
+    <span id="uploadResult"></span>
+</p>
+<p>
+    检测文件完整性:
+    <span id="checkFileRes"></span>
+</p>
+
+<script>        // 每片的大小
+var chunkSize = 1 * 1024 * 1024;
+var uploadResult = document.getElementById("uploadResult");
+var fileMd5Span = document.getElementById("fileMd5");
+var checkFileRes = document.getElementById("checkFileRes");
+var chunksNumber = document.getElementById("chunksNumber");
+var fileMd5;
+var baseURL = "http://localhost:8080";
+var isPaused = false; // 控制是否暂停上传
+var xhrs = []; // 存储所有的 XMLHttpRequest 对象
+let index = 0;
+
+function calculateFileMD5() {
+    var fileInput = document.getElementById('fileInput');
+    var file = fileInput.files[0];
+    getFileMd5(file).then((md5) => {
+        console.info(md5);
+        fileMd5 = md5;
+        fileMd5Span.innerHTML = md5;
+    });
+}
+
+/**
+ * 上传文件
+ */
+function uploadFile() {
+    index = 0;
+    var fileInput = document.getElementById('fileInput');
+    var file = fileInput.files[0];
+    if (!file) return;
+    if (!fileMd5) return;
+
+    // 获取到文件切片
+    let fileArr = sliceFile(file);
+    console.info('分片个数:' + fileArr.length);
+    chunksNumber.innerHTML = fileArr.length;
+
+    // 保存文件名称
+    let fileName = file.name;
+
+    fileArr.forEach((e, i) => {
+        // 创建 formdata 对象
+        let data = new FormData();
+
+        // 切片总长度
+        data.append("totalNumber", fileArr.length);
+        // 切片总大小
+        data.append("chunkSize", chunkSize);
+        // 切片索引
+        data.append("chunkNumber", i);
+        // 文件 md5
+        data.append("md5", fileMd5);
+        // 文件
+        data.append("file", new File([e], fileName));
+
+        // 上传文件
+        upload(data);
+    });
+}
+
+/**
+ * 计算文件 md5 值
+ */
+function getFileMd5(file) {
+    return new Promise((resolve, reject) => {
+        let fileReader = new FileReader();
+        fileReader.onload = function (event) {
+            let fileMd5 = SparkMD5.ArrayBuffer.hash(event.target.result);
+            resolve(fileMd5);
+        };
+        fileReader.readAsArrayBuffer(file);
+    });
+}
+
+
+function upload(data) {
+    var xhr = new XMLHttpRequest();
+    xhr.onload = function () {
+        if (xhr.status === 200) {
+            index++;
+            if (index % 8 === 0){
+                uploadResult.innerHTML += '上传成功分片：' + data.get("chunkNumber") + '<br>';
+
+            }else{
+                uploadResult.innerHTML += '上传成功分片：' + data.get("chunkNumber") + '\t';
+
+            }
+        }
+    };
+    xhr.onerror = function () {
+        uploadResult.innerHTML = '上传失败';
+    };
+    xhr.open('POST', baseURL + '/uploadBig', true);
+    xhr.send(data);
+}
+
+function checkFile(callback) {
+    var xhr = new XMLHttpRequest();
+    xhr.onload = function () {
+        if (xhr.status === 200) {
+            // checkFileRes.innerHTML = '检测文件完整性成功:' + xhr.responseText;
+            // return xhr.responseText;
+            callback(xhr.responseText);
+        }
+    };
+    xhr.onerror = function () {
+       // checkFileRes.innerHTML = '检测文件完整性失败';
+        callback(null);
+    };
+    xhr.open('POST', baseURL + '/checkFile', true);
+    let data = new FormData();
+    data.append("md5", fileMd5);
+    xhr.send(data);
+}
+
+function sliceFile(file) {
+    const chunks = [];
+    let start = 0;
+    let end;
+    while (start < file.size) {
+        end = Math.min(start + chunkSize, file.size);
+        chunks.push(file.slice(start, end));
+        start = end;
+    }
+    return chunks;
+}
+
+function pause() {
+    isPaused = !isPaused;
+    if (isPaused) {
+        xhrs.forEach(xhr => xhr.abort()); // 暂停所有上传请求
+        console.log('暂停上传');
+    } else {
+        console.log('恢复上传');
+    }
+}
+
+function reUpload() {
+    checkFile(function (responseText) {
+        if (responseText === null) {
+            alert('检测文件完整性失败，请重新上传');
+            return 0;
+        }
+
+        const respMsg = JSON.parse(responseText);
+        if (respMsg.chucks === undefined) {
+            alert('续传失败，请重新上传');
+            return 0;
+        }
+        console.log(respMsg);
+    });
+}
+</script>
+
+</body>
+
+</html>
